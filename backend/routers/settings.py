@@ -10,7 +10,56 @@ from pathlib import Path
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
 # ==========================================
-# --- LLM Config Logic ---
+# --- Server Configuration Logic ---
+# ==========================================
+CONFIG_FILE = Path("config.json")
+
+DEFAULT_CONFIG = {
+    "url": "",
+    # Notice: api_key is completely gone from here!
+    "selected_model": "",
+    "override_model": "",
+    "debug_mode": False,
+    "advanced_params": {
+        "temperature": {"enabled": True, "value": 0.8},
+        "max_tokens": {"enabled": True, "value": 16384},
+        "context_length": {"enabled": True, "value": 32768},
+        "top_p": {"enabled": False, "value": 1.0},
+        "top_k": {"enabled": False, "value": 40},
+        "repetition_penalty": {"enabled": False, "value": 1.1},
+        "presence_penalty": {"enabled": False, "value": 0.0},
+        "frequency_penalty": {"enabled": False, "value": 0.0}
+    }
+}
+
+# Create default config if missing
+if not CONFIG_FILE.exists():
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(DEFAULT_CONFIG, f, indent=4)
+
+@router.get("/config")
+async def get_config():
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to read server config")
+
+@router.post("/config")
+async def save_config(config_data: dict):
+    try:
+        # SECURITY STRIP: Actively delete the api_key if the frontend accidentally sends it
+        if "api_key" in config_data:
+            del config_data["api_key"]
+
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config_data, f, indent=4)
+        return {"message": "Configuration permanently saved to server."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to save server config")
+
+# ==========================================
+# --- LLM Connection Logic ---
 # ==========================================
 class LLMConfig(BaseModel):
     url: Optional[str] = ""
@@ -21,10 +70,27 @@ class LLMConfig(BaseModel):
     debug: Optional[bool] = False
 
 def get_active_config(config: LLMConfig):
-    actual_url = config.url if config.url else os.getenv("DEFAULT_LLM_URL", "")
-    actual_key = config.api_key if config.api_key else os.getenv("DEFAULT_LLM_API_KEY", "")
-    actual_model = config.override_model if config.override_model else config.model
+    # Load the server config file
+    server_config = {}
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                server_config = json.load(f)
+        except:
+            pass
+
+    # Cascade 1: URL
+    actual_url = config.url or server_config.get("url") or os.getenv("DEFAULT_LLM_URL", "")
     if actual_url.endswith("/"): actual_url = actual_url[:-1]
+
+    # Cascade 2: API Key
+    actual_key = config.api_key or server_config.get("api_key") or os.getenv("DEFAULT_LLM_API_KEY", "")
+
+    # Cascade 3: Model
+    req_model = config.override_model or config.model
+    server_model = server_config.get("override_model") or server_config.get("selected_model")
+    actual_model = req_model or server_model or ""
+
     return actual_url, actual_key, actual_model
 
 @router.post("/llm/models")
@@ -47,20 +113,16 @@ async def test_llm(config: LLMConfig):
     if not actual_model: raise HTTPException(status_code=400, detail="No model selected.")
     headers = {"Authorization": f"Bearer {actual_key}"} if actual_key else {}
 
-    # Base payload
     payload = {
         "model": actual_model,
         "messages": [{"role": "user", "content": "You are being asked if you exist, create a funny sentence confirming you are alive, be witty, be sarcastic"}]
     }
 
-    # Dynamically inject only the enabled advanced parameters
     if config.advanced_params:
         for key, value in config.advanced_params.items():
             payload[key] = value
 
-    # Fallback to 200 tokens for the test if the user didn't explicitly enable max_tokens
-    if "max_tokens" not in payload:
-        payload["max_tokens"] = 200
+    if "max_tokens" not in payload: payload["max_tokens"] = 200
 
     if config.debug:
         print("\n=== [BACKEND DEBUG: LLM REQUEST PAYLOAD] ===")
@@ -72,7 +134,6 @@ async def test_llm(config: LLMConfig):
         async with httpx.AsyncClient() as client:
             response = await client.post(f"{actual_url}/chat/completions", json=payload, headers=headers, timeout=60.0)
             response.raise_for_status()
-
             response_data = response.json()
 
             if config.debug:
@@ -95,7 +156,6 @@ async def test_llm(config: LLMConfig):
 # ==========================================
 # --- Prompt File Logic ---
 # ==========================================
-
 PROMPTS_DIR = Path("prompts")
 PROMPTS_DIR.mkdir(exist_ok=True)
 

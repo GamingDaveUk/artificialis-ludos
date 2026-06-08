@@ -10,7 +10,6 @@ export default function App() {
   const [activeSettingsTab, setActiveSettingsTab] = useState('LLM');
   const [url, setUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [modelList, setModelList] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [overrideModel, setOverrideModel] = useState('');
   const [debugMode, setDebugMode] = useState(false);
@@ -19,7 +18,8 @@ export default function App() {
   type ParamState = { enabled: boolean, value: number };
   const [advancedParams, setAdvancedParams] = useState<Record<string, ParamState>>({
     temperature: { enabled: true, value: 0.8 },
-    max_tokens: { enabled: true, value: 300 },
+    max_tokens: { enabled: true, value: 16384 },
+    context_length: { enabled: true, value: 32768 },
     top_p: { enabled: false, value: 1.0 },
     top_k: { enabled: false, value: 40 },
     repetition_penalty: { enabled: false, value: 1.1 },
@@ -27,24 +27,57 @@ export default function App() {
     frequency_penalty: { enabled: false, value: 0.0 }
   });
 
-  // Settings State: Testing
+  const [modelList, setModelList] = useState<string[]>([]);
   const [testResponse, setTestResponse] = useState('');
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Settings State: Prompts
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
   const [selectedPromptFile, setSelectedPromptFile] = useState('default.json');
   const [missingDefaultWarning, setMissingDefaultWarning] = useState(false);
   const [promptData, setPromptData] = useState({
-    jailbreak: '',
-    item_generator: '',
-    item_image_gen: '',
-    global_theme: ''
+    jailbreak: '', item_generator: '', item_image_gen: '', global_theme: ''
   });
 
   const VERSION = "0.1.0 Alpha";
+
+  // --- BOOT SEQUENCE: LOAD SERVER CONFIG ---
+  useEffect(() => {
+    const fetchServerConfig = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/settings/config');
+        if (res.ok) {
+          const data = await res.json();
+          setUrl(data.url || '');
+          // We NO LONGER set the API key from the server
+          setSelectedModel(data.selected_model || '');
+          setOverrideModel(data.override_model || '');
+          setDebugMode(data.debug_mode || false);
+          if (data.advanced_params) setAdvancedParams(data.advanced_params);
+        }
+      } catch (err) { console.error("Failed to fetch server config", err); }
+    };
+    fetchServerConfig();
+  }, []);
+
+  // --- SAVE CONFIG TO SERVER ---
+  const saveServerConfig = async () => {
+    // Notice: We intentionally leave apiKey OUT of this payload
+    const payload = {
+      url, selected_model: selectedModel, override_model: overrideModel,
+      debug_mode: debugMode, advanced_params: advancedParams
+    };
+    try {
+      const res = await fetch('http://localhost:8000/api/settings/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) alert("Server configuration saved successfully! (API Keys remain safely in your .env file)");
+      else alert("Failed to save configuration.");
+    } catch (err) { console.error(err); }
+  };
 
   const handleParamToggle = (key: string) => {
     setAdvancedParams(prev => ({ ...prev, [key]: { ...prev[key], enabled: !prev[key].enabled } }));
@@ -78,7 +111,7 @@ export default function App() {
 
     const activeParams: Record<string, number> = {};
     Object.entries(advancedParams).forEach(([key, param]) => {
-      if (param.enabled) activeParams[key] = param.value;
+      if (param.enabled && key !== 'context_length') activeParams[key] = param.value;
     });
 
       const bodyPayload = { url, api_key: apiKey, model: selectedModel, override_model: overrideModel, advanced_params: activeParams, debug: debugMode };
@@ -101,7 +134,6 @@ export default function App() {
           console.log("=== [FRONTEND DEBUG: RECEIVED RESPONSE] ===");
           console.log(data);
         }
-
         setTestResponse(data.reply);
       } catch (err: any) { setErrorMsg(err.message); }
       setIsTesting(false);
@@ -173,6 +205,7 @@ export default function App() {
       testResponse={testResponse} errorMsg={errorMsg} promptFiles={promptFiles} selectedPromptFile={selectedPromptFile}
       loadPromptFile={loadPromptFile} missingDefaultWarning={missingDefaultWarning} fetchPromptFiles={fetchPromptFiles}
       savePromptFile={savePromptFile} promptData={promptData} handlePromptChange={handlePromptChange}
+      saveServerConfig={saveServerConfig} // We pass the new save function down
       />
     )}
     {currentView === 'PLAYGROUND' && <Playground setCurrentView={setCurrentView} />}

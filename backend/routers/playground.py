@@ -1,24 +1,40 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-import httpx
+from sqlalchemy.orm import Session
+from typing import Optional, List
 import json
-import re
+from pathlib import Path
+
+from ..database import SessionLocal
+from ..models import Item
+from ..engine.item_factory import ItemFactory
 from .settings import get_active_config, LLMConfig, PROMPTS_DIR
 
 router = APIRouter(prefix="/api/playground", tags=["Playground"])
+
+# Dependency to get DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 class GenerateItemRequest(BaseModel):
     llm_config: LLMConfig
     prompt_file: str
     item_idea: str
+    lore_context: Optional[str] = ""
+    override_item_prompt: Optional[str] = ""
+    override_image_prompt: Optional[str] = ""
 
 @router.post("/generate/item")
-async def generate_item(request: GenerateItemRequest):
+@router.post("/generate/item")
+async def generate_playground_item(request: GenerateItemRequest, db: Session = Depends(get_db)):
     actual_url, actual_key, actual_model = get_active_config(request.llm_config)
     if not actual_model:
         raise HTTPException(status_code=400, detail="No model configured in Settings.")
 
-    # 1. Load the requested prompt pack
     filepath = PROMPTS_DIR / request.prompt_file
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Prompt pack not found.")
@@ -26,56 +42,65 @@ async def generate_item(request: GenerateItemRequest):
     with open(filepath, "r") as f:
         prompts = json.load(f)
 
-    # 2. Construct the Prompts
     global_theme = prompts.get("global_theme", "Unknown Theme")
     jailbreak = prompts.get("jailbreak", "")
-    item_gen_template = prompts.get("item_generator", "")
-    image_gen_template = prompts.get("item_image_gen", "")
 
-    # Inject the user's idea and theme into the template
-    system_prompt = f"{jailbreak}\n\n{item_gen_template.replace('{theme}', global_theme)}"
-    user_prompt = f"Create the following item: {request.item_idea}"
+    item_gen_template = request.override_item_prompt if request.override_item_prompt else prompts.get("item_generator", "")
+    image_gen_template = request.override_image_prompt if request.override_image_prompt else prompts.get("item_image_gen", "")
 
-    # 3. Call the LLM for the Item Data
-    headers = {"Authorization": f"Bearer {actual_key}"} if actual_key else {}
-    payload = {
-        "model": actual_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "max_tokens": 1000
-    }
+    # CONCATENATE THE PROMPTS INTO ONE INSTRUCTION SET
+    system_prompt = f"{jailbreak}\n\n{item_gen_template.replace('{theme}', global_theme)}\n\n{image_gen_template}"
+    user_prompt = f"Create the following item: {request.item_idea}\nContext/Lore: {request.lore_context}"
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{actual_url}/chat/completions", json=payload, headers=headers, timeout=120.0)
-            response.raise_for_status()
-            message = response.json()["choices"][0]["message"]
-            raw_content = message.get("content", "")
-
-            # Strip thinking tags
-            clean_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL).strip()
-
-            # Use Regex to extract ONLY the JSON object from the response
-            # (Sometimes LLMs ignore the "strict JSON" rule and add "Here is your item: {}")
-            json_match = re.search(r'\{.*\}', clean_content, re.DOTALL)
-            if not json_match:
-                raise ValueError("LLM did not return a valid JSON object.")
-
-            item_json_str = json_match.group(0)
-            item_data = json.loads(item_json_str)
-
+        result = await ItemFactory.generate_item(
+            llm_url=actual_url,
+            llm_key=actual_key,
+            model=actual_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Item Generation Failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # 4. Construct the Image Prompt locally (no second LLM call needed yet)
-    # We just inject the generated item's name/desc into the image template
-    item_for_image = f"{item_data.get('name')} - {item_data.get('description')}"
-    final_image_prompt = image_gen_template.replace("{theme}", global_theme).replace("{item}", item_for_image)
+    item_data = result["item_data"]
 
-    return {
-        "item_data": item_data,
-        "image_prompt": final_image_prompt,
-        "raw_json_string": item_json_str
-    }
+    new_item = Item(
+        name=item_data.get("name", "Unknown"),
+        type=item_data.get("type", "Unknown"),
+        equip_slot=item_data.get("equip_slot", "None"),
+        stats=item_data.get("stats", {}),
+        description=item_data.get("description", ""),
+        value=item_data.get("value", 0),
+        modifications=item_data.get("modifications", []),
+        image_url=result["image_path"],
+        image_prompt=result["image_prompt"],
+        origin_tag="playground"
+    )
+    db.add(new_item)
+    db.commit()
+    db.refresh(new_item)
+
+    return new_item
+
+@router.get("/items")
+async def get_playground_items(db: Session = Depends(get_db)):
+    # Fetch only items created in the playground
+    items = db.query(Item).filter(Item.origin_tag == "playground").all()
+    return items
+
+@router.delete("/items/{item_id}")
+async def delete_item(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Optionally delete the image file from the disk here as well
+    if item.image_url:
+        img_file = Path(item.image_url)
+        if img_file.exists():
+            img_file.unlink()
+
+    db.delete(item)
+    db.commit()
+    return {"message": "Item deleted"}

@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from .routers import settings, playground
-
+import os # <-- Add this import
 load_dotenv()
 
 # Note the dots (.) before the module names
 from .database import engine
 from . import models
-from .routers import settings
+from .routers import settings, playground
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

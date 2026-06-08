@@ -1,0 +1,40 @@
+{
+    "url": "",
+    "selected_model": "deepseek/deepseek-v4-pro-cheaper:thinking",
+    "override_model": "",
+    "debug_mode": false,
+    "advanced_params": {
+        "temperature": {
+            "enabled": true,
+            "value": 0.8
+        },
+        "max_tokens": {
+            "enabled": true,
+            "value": 16384
+        },
+        "context_length": {
+            "enabled": true,
+            "value": 32768
+        },
+        "top_p": {
+            "enabled": false,
+            "value": 1
+        },
+        "top_k": {
+            "enabled": false,
+            "value": 40
+        },
+        "repetition_penalty": {
+            "enabled": false,
+            "value": 1.1
+        },
+        "presence_penalty": {
+            "enabled": false,
+            "value": 0
+        },
+        "frequency_penalty": {
+            "enabled": false,
+            "value": 0
+        }
+    }
+}

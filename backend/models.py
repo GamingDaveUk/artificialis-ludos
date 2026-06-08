@@ -36,6 +36,7 @@ class Player(Base):
 
     image_prompt = Column(Text) # Used by ComfyUI
     image_url = Column(String, nullable=True)
+    origin_tag = Column(String, index=True, default="playground") # Engine tracking
 
     world = relationship("WorldSession", back_populates="player")
 
@@ -58,6 +59,7 @@ class NPC(Base):
 
     image_prompt = Column(Text)
     image_url = Column(String, nullable=True)
+    origin_tag = Column(String, index=True, default="playground") # Engine tracking
     is_alive = Column(Boolean, default=True)
 
     world = relationship("WorldSession", back_populates="npcs")
@@ -74,14 +76,17 @@ class Item(Base):
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
 
     name = Column(String, index=True)
-    type = Column(String) # e.g., "Weapon", "Consumable", "Vehicle"
+    type = Column(String) # e.g., "Weapon", "Armor", "Consumable", "Trinket"
+    equip_slot = Column(String, nullable=True) # e.g., "Torso", "Head", "None"
     description = Column(Text) # The DCC-style funny paragraph
     value = Column(Integer, default=0)
 
+    stats = Column(JSON, default={}) # e.g., {"armor": 2, "festive_cheer": 1}
     modifications = Column(JSON, default=[]) # e.g., ["Scope", "Extended Mag"]
 
     image_prompt = Column(Text)
     image_url = Column(String, nullable=True)
+    origin_tag = Column(String, index=True, default="playground") # Engine tracking
 
     world = relationship("WorldSession", back_populates="items")
 
@@ -100,6 +105,7 @@ class Location(Base):
 
     image_prompt = Column(Text)
     image_url = Column(String, nullable=True)
+    origin_tag = Column(String, index=True, default="playground") # Engine tracking
     is_discovered = Column(Boolean, default=False)
 
     world = relationship("WorldSession", back_populates="locations")
