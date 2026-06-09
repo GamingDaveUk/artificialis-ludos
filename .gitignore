@@ -8,3 +8,5 @@ node_modules/
 __pycache__/
 # Ignore generated Engine assets
 assets/images/
+# helpers
+.opencode
