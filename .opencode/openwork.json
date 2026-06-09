@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "workspace": {
+    "name": "artificialis-ludos",
+    "createdAt": 1781036096447,
+    "preset": "starter"
+  },
+  "authorizedRoots": [
+    "/home/mrgreaper/Drives/Projects/artificialis-ludos"
+  ],
+  "reload": null
+}

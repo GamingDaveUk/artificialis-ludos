@@ -11,7 +11,7 @@ ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 class ItemFactory:
     @staticmethod
-    async def generate_item(llm_url: str, llm_key: str, model: str, system_prompt: str, user_prompt: str):
+    async def generate_item(llm_url: str, llm_key: str, model: str, system_prompt: str, user_prompt: str, max_tokens: int = 4096):
         headers = {"Authorization": f"Bearer {llm_key}"} if llm_key else {}
 
         # --- SINGLE LLM CALL ---
@@ -21,7 +21,7 @@ class ItemFactory:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            "max_tokens": 1500
+            "max_tokens": max_tokens  # <--- Now it uses the variable
         }
 
         async with httpx.AsyncClient() as client:
@@ -29,13 +29,17 @@ class ItemFactory:
             response.raise_for_status()
             raw_content = response.json()["choices"][0]["message"].get("content", "")
 
-        # Extract JSON
+        # Extract JSON safely by finding the first and last curly braces
         clean_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL).strip()
-        json_match = re.search(r'\{.*\}', clean_content, re.DOTALL)
-        if not json_match:
+
+        start_idx = clean_content.find('{')
+        end_idx = clean_content.rfind('}')
+
+        if start_idx == -1 or end_idx == -1:
             raise ValueError("LLM did not return a valid JSON object.")
 
-        item_data = json.loads(json_match.group(0))
+        json_str = clean_content[start_idx:end_idx + 1]
+        item_data = json.loads(json_str)
 
         # Extract the image prompt the LLM generated, or fallback if it hallucinates
         final_image_prompt = item_data.get("image_prompt", f"A highly detailed game icon of {item_data.get('name', 'an item')}.")

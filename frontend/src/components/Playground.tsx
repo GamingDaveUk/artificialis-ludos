@@ -30,6 +30,11 @@ export default function Playground({ setCurrentView }: any) {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [activeItem, setActiveItem] = useState<Item | null>(null);
 
+    // --- Raw JSON Stats Editor State ---
+    const [statsJson, setStatsJson] = useState('');
+    const [statsJsonError, setStatsJsonError] = useState<string | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
+
     useEffect(() => {
         const fetchDefaults = async () => {
             try {
@@ -125,6 +130,82 @@ export default function Playground({ setCurrentView }: any) {
         if (activeItem) setActiveItem({ ...activeItem, [field]: value });
     };
 
+    // Sync the raw JSON editor whenever the active item changes
+    useEffect(() => {
+        if (activeItem) {
+            const formatted = JSON.stringify(activeItem.stats, null, 2);
+            setStatsJson(formatted);
+            setStatsJsonError(null);
+        } else {
+            setStatsJson('');
+            setStatsJsonError(null);
+        }
+    }, [activeItem?.id]);
+
+    // Live validation on every keystroke in the stats editor
+    const handleStatsJsonChange = (raw: string) => {
+        setStatsJson(raw);
+        if (!raw.trim()) {
+            setStatsJsonError(null);
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
+                setStatsJsonError('Stats must be a JSON object (e.g. {"armor": 2})');
+            } else {
+                // Validate that all values are numbers or strings
+                for (const [key, val] of Object.entries(parsed)) {
+                    if (typeof val !== 'number' && typeof val !== 'string') {
+                        setStatsJsonError(`Invalid value for "${key}": must be a number or string, got ${typeof val}`);
+                        return;
+                    }
+                }
+                setStatsJsonError(null);
+                // Keep the activeItem in sync so the card preview updates
+                if (activeItem) setActiveItem({ ...activeItem, stats: parsed });
+            }
+        } catch (e: any) {
+            setStatsJsonError(e.message);
+        }
+    };
+
+    const handleSaveItem = async () => {
+        if (!activeItem) return;
+        if (statsJsonError) return alert(`Fix JSON errors before saving:\n${statsJsonError}`);
+        setIsSaving(true);
+        try {
+            const payload: Record<string, any> = {
+                name: activeItem.name,
+                type: activeItem.type,
+                equip_slot: activeItem.equip_slot,
+                description: activeItem.description,
+                value: activeItem.value,
+                modifications: activeItem.modifications,
+            };
+            // Only send stats if the editor has valid JSON
+            try {
+                payload.stats = JSON.parse(statsJson);
+            } catch {
+                payload.stats = activeItem.stats;
+            }
+            const res = await fetch(`http://localhost:8000/api/playground/items/${activeItem.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Save failed');
+            }
+            await fetchItems();
+            alert('Item saved successfully.');
+        } catch (err: any) {
+            alert(`Save Failed: ${err.message}`);
+        }
+        setIsSaving(false);
+    };
+
     return (
         <div className="max-w-7xl mx-auto w-full animate-fade-in pb-12">
         {/* Header */}
@@ -190,7 +271,7 @@ export default function Playground({ setCurrentView }: any) {
             <button onClick={handleNext} disabled={currentIndex === items.length - 1 || items.length === 0} className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-300 px-3 py-1 rounded text-sm font-bold transition-colors">Next ►</button>
             </div>
             <div className="flex space-x-2">
-            <button onClick={() => alert('Save Edits: Phase 2')} className="text-xs font-bold text-emerald-500 hover:text-emerald-400">[ SAVE ]</button>
+                <button onClick={handleSaveItem} disabled={isSaving} className={`text-xs font-bold ${statsJsonError ? 'text-red-500 cursor-not-allowed' : 'text-emerald-500 hover:text-emerald-400'}`}>[ {isSaving ? 'SAVING...' : 'SAVE'} ]</button>
             <button onClick={handleDeleteItem} className="text-xs font-bold text-red-500 hover:text-red-400">[ DELETE ]</button>
             </div>
             </div>
@@ -245,6 +326,37 @@ export default function Playground({ setCurrentView }: any) {
                 <div>
                 <label className="text-[10px] font-bold text-neutral-500 uppercase block">Description</label>
                 <textarea value={activeItem.description} onChange={(e) => handleEditChange('description', e.target.value)} className="w-full bg-neutral-900 rounded border border-neutral-800 text-neutral-300 text-xs p-2 h-20 focus:outline-none focus:border-emerald-500" />
+                </div>
+
+                {/* Raw JSON Stats Editor */}
+                <div className="bg-neutral-950 p-4 rounded border border-neutral-800">
+                <div className="flex items-center justify-between mb-1">
+                    <label className="text-[10px] font-bold text-emerald-600 uppercase">Stats JSON Editor</label>
+                    {statsJsonError && (
+                        <span className="text-[10px] font-bold text-red-400 flex items-center gap-1">
+                            <svg className="w-3 h-3 inline" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"/></svg>
+                            MALFORMED JSON
+                        </span>
+                    )}
+                    {!statsJsonError && statsJson.trim() && (
+                        <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                            <svg className="w-3 h-3 inline" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>
+                            VALID
+                        </span>
+                    )}
+                </div>
+                <textarea
+                    value={statsJson}
+                    onChange={(e) => handleStatsJsonChange(e.target.value)}
+                    spellCheck={false}
+                    className={`w-full bg-neutral-900 rounded border font-mono text-xs p-2 h-28 focus:outline-none transition-colors ${
+                        statsJsonError
+                            ? 'border-red-500/70 focus:border-red-400 text-red-300'
+                            : 'border-neutral-800 focus:border-emerald-500 text-emerald-300'
+                    }`}
+                    placeholder='{"armor": 2, "festive_cheer": 1}'
+                />
+                {statsJsonError && <p className="text-[10px] text-red-400 mt-1 break-words">{statsJsonError}</p>}
                 </div>
                 </div>
 

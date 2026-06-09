@@ -9,6 +9,7 @@ from ..database import SessionLocal
 from ..models import Item
 from ..engine.item_factory import ItemFactory
 from .settings import get_active_config, LLMConfig, PROMPTS_DIR
+import os
 
 router = APIRouter(prefix="/api/playground", tags=["Playground"])
 
@@ -28,7 +29,16 @@ class GenerateItemRequest(BaseModel):
     override_item_prompt: Optional[str] = ""
     override_image_prompt: Optional[str] = ""
 
-@router.post("/generate/item")
+
+class UpdateItemRequest(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    equip_slot: Optional[str] = None
+    stats: Optional[dict] = None
+    description: Optional[str] = None
+    value: Optional[int] = None
+    modifications: Optional[list] = None
+
 @router.post("/generate/item")
 async def generate_playground_item(request: GenerateItemRequest, db: Session = Depends(get_db)):
     actual_url, actual_key, actual_model = get_active_config(request.llm_config)
@@ -52,13 +62,26 @@ async def generate_playground_item(request: GenerateItemRequest, db: Session = D
     system_prompt = f"{jailbreak}\n\n{item_gen_template.replace('{theme}', global_theme)}\n\n{image_gen_template}"
     user_prompt = f"Create the following item: {request.item_idea}\nContext/Lore: {request.lore_context}"
 
+    # Grab max_tokens from your config.json, default to 4096 if it fails
+    actual_max_tokens = 4096
+    config_path = Path("config.json")
+    if config_path.exists():
+        try:
+            with open(config_path, "r") as cf:
+                server_config = json.load(cf)
+                # Navigating the advanced_params dictionary
+                actual_max_tokens = server_config.get("advanced_params", {}).get("max_tokens", {}).get("value", 4096)
+        except Exception:
+            pass
+
     try:
         result = await ItemFactory.generate_item(
             llm_url=actual_url,
             llm_key=actual_key,
             model=actual_model,
             system_prompt=system_prompt,
-            user_prompt=user_prompt
+            user_prompt=user_prompt,
+            max_tokens=actual_max_tokens # <--- Passed dynamically
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -104,3 +127,36 @@ async def delete_item(item_id: int, db: Session = Depends(get_db)):
     db.delete(item)
     db.commit()
     return {"message": "Item deleted"}
+
+
+@router.put("/items/{item_id}")
+async def update_item(item_id: int, request: UpdateItemRequest, db: Session = Depends(get_db)):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if request.name is not None:
+        item.name = request.name
+    if request.type is not None:
+        item.type = request.type
+    if request.equip_slot is not None:
+        item.equip_slot = request.equip_slot
+    if request.stats is not None:
+        # Validate that all values are numbers or strings
+        for key, val in request.stats.items():
+            if not isinstance(val, (int, float, str)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid stat value for '{key}': must be a number or string, got {type(val).__name__}"
+                )
+        item.stats = request.stats
+    if request.description is not None:
+        item.description = request.description
+    if request.value is not None:
+        item.value = request.value
+    if request.modifications is not None:
+        item.modifications = request.modifications
+
+    db.commit()
+    db.refresh(item)
+    return item

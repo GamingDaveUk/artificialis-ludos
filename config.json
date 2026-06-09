@@ -2,7 +2,7 @@
     "url": "",
     "selected_model": "deepseek/deepseek-v4-pro-cheaper:thinking",
     "override_model": "",
-    "debug_mode": false,
+    "debug_mode": true,
     "advanced_params": {
         "temperature": {
             "enabled": true,
